@@ -2,7 +2,7 @@ name: Run Selenium Automation
 
 on:
   schedule:
-    - cron: '12,42 * * * *'  # Chạy hàng giờ
+    - cron: '18,58 * * * *'  # Chạy hàng giờ
   workflow_dispatch:
 
 permissions:
