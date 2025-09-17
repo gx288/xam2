@@ -4,7 +4,7 @@ on:
     - cron: '18,58 * * * *' # Chạy hàng giờ
   workflow_dispatch:
 permissions:
-  contents: write # Thêm quyền ghi để commit/push file
+  contents: write # Quyền ghi để commit/push file
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -35,8 +35,8 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install selenium==4.25.0 webdriver-manager==4.0.2
-        pip show selenium webdriver-manager || echo "Failed to install dependencies"
+        pip install selenium==4.25.0 webdriver-manager==4.0.2 undetected-chromedriver==3.5.5 2captcha-python==1.2.2
+        pip show selenium webdriver-manager undetected-chromedriver 2captcha-python || echo "Failed to install dependencies"
         pip list  # Log danh sách package để debug
 
     - name: Setup Chrome and Chromedriver
@@ -55,6 +55,8 @@ jobs:
         DISPLAY: :99
         USERNAME: ${{ secrets.USERNAME }}
         PASSWORD: ${{ secrets.PASSWORD }}
+        TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        # PROXY: http://${{ secrets.PROXY_USER }}:${{ secrets.PROXY_PASS }}@proxy.brightdata.com:port # Nếu dùng proxy, bỏ comment
 
     - name: Upload debug artifacts
       if: always()
