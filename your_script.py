@@ -1,4 +1,3 @@
-import time
 import csv
 import logging
 import os
@@ -9,10 +8,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
-import undetected_chromedriver as uc
-from twocaptcha import TwoCaptcha
+from seleniumbase import SB
 
-# Lấy đường dẫn đúng cho file khi chạy dưới dạng thực thi hoặc mã nguồn
 def get_resource_path(relative_path):
     """Lấy đường dẫn đúng cho file khi chạy dưới dạng thực thi hoặc mã nguồn"""
     if hasattr(sys, '_MEIPASS'):
@@ -20,7 +17,6 @@ def get_resource_path(relative_path):
     else:
         return os.path.join(os.path.dirname(__file__), relative_path)
 
-# Đọc cấu hình từ file config.json
 def load_config():
     """Đọc đường dẫn file data.csv và URL website từ config.json"""
     config_path = get_resource_path('config.json')
@@ -37,7 +33,6 @@ def load_config():
         logging.error("File config.json không đúng định dạng JSON")
         return {'website_url': 'https://xamvn.blog/threads/171635/reply', 'data_csv_path': 'data.csv'}
 
-# Thiết lập logging với encoding UTF-8
 log_directory = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(log_directory):
     os.makedirs(log_directory)
@@ -50,155 +45,103 @@ logging.basicConfig(
     ]
 )
 
-# Đảm bảo console hỗ trợ UTF-8
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
-def setup_driver():
-    """Khởi tạo WebDriver với undetected-chromedriver để tránh phát hiện bot."""
-    logging.info("Đang khởi tạo undetected-chromedriver...")
-    options = uc.ChromeOptions()
-    options.add_argument('--headless=new')
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--disable-extensions')
-    options.add_argument('--disable-plugins-discovery')
-    options.add_argument('--window-size=1920,1080')
-    options.add_argument(
-        'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
-    # Nếu dùng proxy, bỏ comment dòng dưới và cấu hình proxy
-    # options.add_argument('--proxy-server=http://username:password@proxy.brightdata.com:port')
-    
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    
-    driver = uc.Chrome(options=options, version_main=120)
-    
-    driver.execute_cdp_cmd('Network.setUserAgentOverride', {
-        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    })
-    driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-    driver.execute_cdp_cmd('Emulation.setLocaleOverride', {"locale": "vi-VN"})
-    driver.execute_cdp_cmd('Emulation.setTimezoneOverride', {"timezoneId": "Asia/Ho_Chi_Minh"})
-    
-    return driver
-
-def solve_captcha(driver, website_url, api_key):
-    """Hàm xử lý Cloudflare Turnstile CAPTCHA bằng 2Captcha"""
-    logging.info("Đang xử lý Cloudflare Turnstile CAPTCHA...")
-    try:
-        solver = TwoCaptcha(api_key)
-        result = solver.turnstile(
-            sitekey=driver.execute_script("return document.querySelector('script[src*=\"turnstile\"]').src.match(/render=([^&]+)/)[1] || '0x4AAAAAAADnq3U4KAtpF3oa'"),
-            url=website_url
-        )
-        token = result['code']
-        driver.execute_script(f'document.getElementById("cf-chl-widget-ldydq_response").value = "{token}";')
-        logging.info("Đã gửi token CAPTCHA thành công")
-        time.sleep(random.uniform(2, 5))
-        return True
-    except Exception as e:
-        logging.error(f"Lỗi khi giải CAPTCHA: {str(e)}")
-        driver.save_screenshot('captcha_error.png')
-        with open('captcha_page_source.html', 'w', encoding='utf-8') as f:
-            f.write(driver.page_source)
-        logging.info("Đã lưu page source và screenshot để debug CAPTCHA")
-        return False
-
-def login_to_website(driver, username, password):
-    """Hàm thực hiện đăng nhập vào website"""
+def login_to_website(sb, username, password):
+    """Hàm thực hiện đăng nhập trên trang login (nếu đã ở trang login)"""
     logging.info("Đang thực hiện đăng nhập...")
     try:
-        # Kiểm tra nếu đang ở trang đăng nhập
-        if "Đăng nhập" in driver.title:
+        # Kiểm tra nếu đang ở trang login
+        if "Đăng nhập" in sb.get_title():
             logging.info("Đã ở trang đăng nhập, tự động điền form")
+        else:
+            logging.warning("Không phải trang đăng nhập, kiểm tra redirect")
         
-        username_field = WebDriverWait(driver, 10).until(
+        username_field = WebDriverWait(sb.driver, 10).until(
             EC.presence_of_element_located((By.NAME, "login"))
         )
         username_field.clear()
         username_field.send_keys(username)
-        time.sleep(random.uniform(1, 3))
+        sb.sleep(random.uniform(1, 3))
         logging.info("Đã nhập tên đăng nhập")
         
-        password_field = driver.find_element(By.NAME, "password")
+        password_field = sb.driver.find_element(By.NAME, "password")
         password_field.clear()
         password_field.send_keys(password)
-        time.sleep(random.uniform(1, 3))
+        sb.sleep(random.uniform(1, 3))
         logging.info("Đã nhập mật khẩu")
         
         # Check "Duy trì trạng thái đăng nhập" nếu có
         try:
-            remember_checkbox = driver.find_element(By.NAME, "remember")
+            remember_checkbox = sb.driver.find_element(By.NAME, "remember")
             if not remember_checkbox.is_selected():
-                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", remember_checkbox)
                 remember_checkbox.click()
-                time.sleep(1)
+                sb.sleep(1)
         except NoSuchElementException:
-            logging.info("Không tìm thấy checkbox 'Duy trì trạng thái đăng nhập'")
+            pass  # Không có checkbox thì bỏ qua
         
-        login_button = driver.find_element(By.CSS_SELECTOR, "button.button--primary[type='submit']")
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_button)
+        login_button = sb.driver.find_element(By.CSS_SELECTOR, "button.button--primary[type='submit']")
+        sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_button)
         login_button.click()
-        time.sleep(random.uniform(3, 6))
+        sb.sleep(random.uniform(3, 6))
         logging.info("Đã click nút đăng nhập")
         
-        # Wait cho trang reply sau login
-        WebDriverWait(driver, 30).until(
+        # Wait cho trang reply sau login (editor comment)
+        WebDriverWait(sb.driver, 30).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.fr-element.fr-view[contenteditable='true']"))
         )
         logging.info("Đăng nhập thành công và đã chuyển đến trang bình luận")
         return True
     except (TimeoutException, NoSuchElementException) as e:
         logging.error(f"Lỗi trong quá trình đăng nhập: {str(e)}")
-        logging.info(f"Current URL: {driver.current_url}")
+        logging.info(f"Current URL: {sb.get_current_url()}")
         with open('error_page_source.html', 'w', encoding='utf-8') as f:
-            f.write(driver.page_source)
-        driver.save_screenshot('login_error.png')
+            f.write(sb.get_page_source())
+        sb.save_screenshot('login_error.png')
         logging.info("Đã lưu page source và screenshot để debug")
         return False
 
-def post_comment(driver, comment_text):
-    """Hàm thực hiện đăng bình luận"""
+def post_comment(sb, comment_text):
+    """Hàm thực hiện đăng bình luận dùng SeleniumBase"""
     logging.info(f"Đang đăng bình luận: {comment_text}")
     try:
-        editor = WebDriverWait(driver, 10).until(
+        editor = WebDriverWait(sb.driver, 10).until(
             EC.element_to_be_clickable((By.CSS_SELECTOR, "div.fr-element.fr-view[contenteditable='true']"))
         )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", editor)
-        time.sleep(random.uniform(1, 3))
-        driver.execute_script("arguments[0].innerHTML = '';", editor)
-        driver.execute_script("arguments[0].innerText = arguments[1];", editor, comment_text)
-        driver.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", editor)
-        time.sleep(random.uniform(1, 3))
+        sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", editor)
+        sb.sleep(random.uniform(1, 3))
+        sb.execute_script("arguments[0].innerHTML = '';", editor)
+        sb.execute_script("arguments[0].innerText = arguments[1];", editor, comment_text)
+        sb.execute_script("arguments[0].dispatchEvent(new Event('input', { bubbles: true }));", editor)
+        sb.sleep(random.uniform(1, 3))
         logging.info("Đã nhập nội dung bình luận")
         
         # Simulate human: Random scroll
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
-        time.sleep(random.uniform(1, 2))
+        sb.execute_script("window.scrollTo(0, document.body.scrollHeight / 2);")
+        sb.sleep(random.uniform(1, 2))
         
-        submit_button = WebDriverWait(driver, 10).until(
+        submit_button = WebDriverWait(sb.driver, 10).until(
             EC.element_to_be_clickable((By.XPATH, "//button[@type='submit' and .//span[contains(text(), 'Trả lời')]]"))
         )
-        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
-        driver.execute_script("arguments[0].click();", submit_button)
-        time.sleep(random.uniform(3, 6))
+        sb.execute_script("arguments[0].scrollIntoView({block: 'center'});", submit_button)
+        sb.execute_script("arguments[0].click();", submit_button)
+        sb.sleep(random.uniform(3, 6))
         logging.info("Đã click nút đăng bình luận")
         
-        WebDriverWait(driver, 10).until(
+        # Wait cho editor reset sau post
+        WebDriverWait(sb.driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.fr-element.fr-view[contenteditable='true']"))
         )
         logging.info("Bình luận đã được đăng thành công!")
-        time.sleep(2)
+        sb.sleep(2)
         return True
     except (TimeoutException, NoSuchElementException, ElementClickInterceptedException) as e:
         logging.error(f"Lỗi trong quá trình đăng bình luận: {str(e)}")
-        logging.info(f"Current URL: {driver.current_url}")
+        logging.info(f"Current URL: {sb.get_current_url()}")
         with open('error_page_source.html', 'w', encoding='utf-8') as f:
-            f.write(driver.page_source)
-        driver.save_screenshot('post_error.png')
+            f.write(sb.get_page_source())
+        sb.save_screenshot('post_error.png')
         logging.info("Đã lưu page source và screenshot để debug")
         return False
 
@@ -221,7 +164,6 @@ def remove_first_comment_from_csv(csv_path):
         logging.error(f"Lỗi khi xóa bình luận khỏi file data.csv: {str(e)}")
 
 def main():
-    driver = setup_driver()
     config = load_config()
     website_url = config['website_url']
     csv_path = get_resource_path(config['data_csv_path'])
@@ -235,80 +177,66 @@ def main():
                 logging.info(f"Đã đọc bình luận đầu tiên: {comment}")
             else:
                 logging.error("File data.csv trống hoặc không có bình luận hợp lệ")
-                driver.quit()
                 return
     except FileNotFoundError:
         logging.error(f"File data.csv không tồn tại tại {csv_path}")
-        driver.quit()
         return
     except Exception as e:
         logging.error(f"Lỗi khi đọc file CSV: {str(e)}")
-        driver.quit()
         return
     
-    try:
-        logging.info(f"Đang mở trang web: {website_url}")
-        max_retries = 3
-        for attempt in range(max_retries):
-            driver.get(website_url)
-            time.sleep(random.uniform(10, 20))
-            
-            # Kiểm tra và giải CAPTCHA nếu có
-            if "Just a moment..." in driver.title or "Just a moment..." in driver.page_source:
-                logging.warning(f"Cloudflare anti-bot page detected (attempt {attempt + 1}/{max_retries})")
-                api_key = os.getenv('TWOCAPTCHA_API_KEY')
-                if api_key and solve_captcha(driver, website_url, api_key):
-                    logging.info("Đã thử giải CAPTCHA")
-                else:
-                    logging.error("Không thể giải CAPTCHA hoặc API key không được cung cấp")
+    with SB(uc=True, headless=True) as sb:
+        try:
+            logging.info(f"Đang mở trang web: {website_url}")
+            # Retry tối đa 3 lần để bypass Cloudflare (nếu còn)
+            max_retries = 3
+            for attempt in range(max_retries):
+                sb.uc_open_with_reconnect(website_url, reconnect_time=20)
+                sb.sleep(random.uniform(15, 25))  # Dùng sb.sleep thay time.sleep
                 
+                # Fix: Sử dụng sb.get_title() và sb.get_page_source()
+                if "Just a moment..." not in sb.get_title() and "Just a moment..." not in sb.get_page_source():
+                    break  # Thành công, thoát vòng retry
+                logging.warning(f"Cloudflare anti-bot page detected (attempt {attempt + 1}/{max_retries})")
                 with open(f'cloudflare_page_source_attempt_{attempt + 1}.html', 'w', encoding='utf-8') as f:
-                    f.write(driver.page_source)
-                driver.save_screenshot(f'cloudflare_error_attempt_{attempt + 1}.png')
+                    f.write(sb.get_page_source())
+                sb.save_screenshot(f'cloudflare_error_attempt_{attempt + 1}.png')
                 logging.info(f"Đã lưu page source và screenshot (attempt {attempt + 1}) để debug")
                 if attempt < max_retries - 1:
-                    time.sleep(random.uniform(5, 10))
-                continue
+                    sb.sleep(random.uniform(5, 10))
             
-            break
-        
-        if "Just a moment..." in driver.title or "Just a moment..." in driver.page_source:
-            logging.error("Không thể bypass Cloudflare sau tất cả các lần thử")
-            driver.quit()
-            return
-        
-        WebDriverWait(driver, 30).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
-        logging.info("Trang web đã tải xong")
-        
-        username = os.getenv('USERNAME')
-        password = os.getenv('PASSWORD')
-        if not username or not password:
-            logging.error("USERNAME hoặc PASSWORD không được cung cấp qua environment variables")
-            driver.quit()
-            return
-        
-        if not login_to_website(driver, username, password):
-            logging.error("Đăng nhập thất bại, dừng chương trình")
-            driver.quit()
-            return
-        
-        logging.info("Đang xử lý bình luận...")
-        if post_comment(driver, comment):
-            logging.info("Đăng bình luận thành công, xóa bình luận khỏi file data.csv")
-            remove_first_comment_from_csv(csv_path)
-        else:
-            logging.error("Không thể đăng bình luận, giữ nguyên file data.csv")
-    except Exception as e:
-        logging.error(f"Lỗi không mong muốn: {str(e)}")
-        with open('error_page_source.html', 'w', encoding='utf-8') as f:
-            f.write(driver.page_source)
-        driver.save_screenshot('error_page.png')
-        logging.info("Đã lưu page source và screenshot để debug")
-    finally:
-        driver.quit()
-        logging.info("Đã đóng trình duyệt")
+            if "Just a moment..." in sb.get_title() or "Just a moment..." in sb.get_page_source():
+                logging.error("Không thể bypass Cloudflare sau tất cả các lần thử")
+                return
+            
+            WebDriverWait(sb.driver, 30).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            logging.info("Trang web đã tải xong (bypass Cloudflare thành công)")
+            
+            username = os.getenv('USERNAME')
+            password = os.getenv('PASSWORD')
+            if not username or not password:
+                logging.error("USERNAME hoặc PASSWORD không được cung cấp qua environment variables")
+                return
+            
+            # Thực hiện login (sẽ tự động nếu ở trang login)
+            if not login_to_website(sb, username, password):
+                logging.error("Đăng nhập thất bại, dừng chương trình")
+                return
+            
+            logging.info("Đang xử lý bình luận...")
+            if post_comment(sb, comment):
+                logging.info("Đăng bình luận thành công, xóa bình luận khỏi file data.csv")
+                remove_first_comment_from_csv(csv_path)
+            else:
+                logging.error("Không thể đăng bình luận, giữ nguyên file data.csv")
+        except Exception as e:
+            logging.error(f"Lỗi không mong muốn: {str(e)}")
+            with open('error_page_source.html', 'w', encoding='utf-8') as f:
+                f.write(sb.get_page_source())
+            sb.save_screenshot('error_page.png')
+            logging.info("Đã lưu page source và screenshot để debug")
 
 if __name__ == "__main__":
     main()
