@@ -5,15 +5,14 @@ import os
 import sys
 import json
 import random
-from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException, ElementClickInterceptedException
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
+from twocaptcha import TwoCaptcha
 
+# Lấy đường dẫn đúng cho file khi chạy dưới dạng thực thi hoặc mã nguồn
 def get_resource_path(relative_path):
     """Lấy đường dẫn đúng cho file khi chạy dưới dạng thực thi hoặc mã nguồn"""
     if hasattr(sys, '_MEIPASS'):
@@ -21,6 +20,7 @@ def get_resource_path(relative_path):
     else:
         return os.path.join(os.path.dirname(__file__), relative_path)
 
+# Đọc cấu hình từ file config.json
 def load_config():
     """Đọc đường dẫn file data.csv và URL website từ config.json"""
     config_path = get_resource_path('config.json')
@@ -37,6 +37,7 @@ def load_config():
         logging.error("File config.json không đúng định dạng JSON")
         return {'website_url': 'https://xamvn.blog/threads/171635/reply', 'data_csv_path': 'data.csv'}
 
+# Thiết lập logging với encoding UTF-8
 log_directory = os.path.join(os.path.expanduser("~"), "Documents")
 if not os.path.exists(log_directory):
     os.makedirs(log_directory)
@@ -49,14 +50,15 @@ logging.basicConfig(
     ]
 )
 
+# Đảm bảo console hỗ trợ UTF-8
 if sys.stdout.encoding != 'utf-8':
     sys.stdout.reconfigure(encoding='utf-8')
 
 def setup_driver():
-    """Khởi tạo WebDriver với các tùy chọn để tránh phát hiện bot."""
-    logging.info("Đang khởi tạo WebDriver với ChromeDriverManager...")
-    options = Options()
-    options.add_argument('--headless')
+    """Khởi tạo WebDriver với undetected-chromedriver để tránh phát hiện bot."""
+    logging.info("Đang khởi tạo undetected-chromedriver...")
+    options = uc.ChromeOptions()
+    options.add_argument('--headless=new')
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
@@ -66,11 +68,13 @@ def setup_driver():
     options.add_argument('--window-size=1920,1080')
     options.add_argument(
         'user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    # Nếu dùng proxy, bỏ comment dòng dưới và cấu hình proxy
+    # options.add_argument('--proxy-server=http://username:password@proxy.brightdata.com:port')
     
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option('useAutomationExtension', False)
     
-    driver = webdriver.Chrome(service=ChromeService(ChromeDriverManager().install()), options=options)
+    driver = uc.Chrome(options=options, version_main=120)
     
     driver.execute_cdp_cmd('Network.setUserAgentOverride', {
         "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -80,6 +84,28 @@ def setup_driver():
     driver.execute_cdp_cmd('Emulation.setTimezoneOverride', {"timezoneId": "Asia/Ho_Chi_Minh"})
     
     return driver
+
+def solve_captcha(driver, website_url, api_key):
+    """Hàm xử lý Cloudflare Turnstile CAPTCHA bằng 2Captcha"""
+    logging.info("Đang xử lý Cloudflare Turnstile CAPTCHA...")
+    try:
+        solver = TwoCaptcha(api_key)
+        result = solver.turnstile(
+            sitekey=driver.execute_script("return document.querySelector('script[src*=\"turnstile\"]').src.match(/render=([^&]+)/)[1] || '0x4AAAAAAADnq3U4KAtpF3oa'"),
+            url=website_url
+        )
+        token = result['code']
+        driver.execute_script(f'document.getElementById("cf-chl-widget-ldydq_response").value = "{token}";')
+        logging.info("Đã gửi token CAPTCHA thành công")
+        time.sleep(random.uniform(2, 5))
+        return True
+    except Exception as e:
+        logging.error(f"Lỗi khi giải CAPTCHA: {str(e)}")
+        driver.save_screenshot('captcha_error.png')
+        with open('captcha_page_source.html', 'w', encoding='utf-8') as f:
+            f.write(driver.page_source)
+        logging.info("Đã lưu page source và screenshot để debug CAPTCHA")
+        return False
 
 def login_to_website(driver, username, password):
     """Hàm thực hiện đăng nhập vào website"""
@@ -103,7 +129,7 @@ def login_to_website(driver, username, password):
         time.sleep(random.uniform(1, 3))
         logging.info("Đã nhập mật khẩu")
         
-        # Check "Duy trì trạng thái đăng nhập"
+        # Check "Duy trì trạng thái đăng nhập" nếu có
         try:
             remember_checkbox = driver.find_element(By.NAME, "remember")
             if not remember_checkbox.is_selected():
@@ -225,17 +251,26 @@ def main():
         max_retries = 3
         for attempt in range(max_retries):
             driver.get(website_url)
-            time.sleep(random.uniform(15, 25))
+            time.sleep(random.uniform(10, 20))
             
-            if "Just a moment..." not in driver.title and "Just a moment..." not in driver.page_source:
-                break
-            logging.warning(f"Cloudflare anti-bot page detected (attempt {attempt + 1}/{max_retries})")
-            with open(f'cloudflare_page_source_attempt_{attempt + 1}.html', 'w', encoding='utf-8') as f:
-                f.write(driver.page_source)
-            driver.save_screenshot(f'cloudflare_error_attempt_{attempt + 1}.png')
-            logging.info(f"Đã lưu page source và screenshot (attempt {attempt + 1}) để debug")
-            if attempt < max_retries - 1:
-                time.sleep(random.uniform(5, 10))
+            # Kiểm tra và giải CAPTCHA nếu có
+            if "Just a moment..." in driver.title or "Just a moment..." in driver.page_source:
+                logging.warning(f"Cloudflare anti-bot page detected (attempt {attempt + 1}/{max_retries})")
+                api_key = os.getenv('TWOCAPTCHA_API_KEY')
+                if api_key and solve_captcha(driver, website_url, api_key):
+                    logging.info("Đã thử giải CAPTCHA")
+                else:
+                    logging.error("Không thể giải CAPTCHA hoặc API key không được cung cấp")
+                
+                with open(f'cloudflare_page_source_attempt_{attempt + 1}.html', 'w', encoding='utf-8') as f:
+                    f.write(driver.page_source)
+                driver.save_screenshot(f'cloudflare_error_attempt_{attempt + 1}.png')
+                logging.info(f"Đã lưu page source và screenshot (attempt {attempt + 1}) để debug")
+                if attempt < max_retries - 1:
+                    time.sleep(random.uniform(5, 10))
+                continue
+            
+            break
         
         if "Just a moment..." in driver.title or "Just a moment..." in driver.page_source:
             logging.error("Không thể bypass Cloudflare sau tất cả các lần thử")
